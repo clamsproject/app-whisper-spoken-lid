@@ -1,25 +1,44 @@
 """
 Whisper Spoken LID: language identification over fixed-length windows of an
 audio track, with the windows read through the SDK's audio document helper.
+Consecutive windows with the same most probable language become one
+TimeFrame.
 """
 import argparse
 import logging
-from itertools import chain, islice
+from itertools import chain, groupby, islice
 
 import torch
 import whisper
 from clams import ClamsApp, Restifier
-from mmif import Mmif, AnnotationTypes, DocumentTypes
+from metadata import MAX_WINDOW_MS
+from mmif import AnnotationTypes, DocumentTypes, Mmif
 from mmif.utils import audio_document_helper as adh
 from whisper.tokenizer import get_tokenizer
-
-from metadata import MAX_WINDOW_MS
 
 
 def batched(iterable, size):
     iterator = iter(iterable)
     while batch := list(islice(iterator, size)):
         yield batch
+
+
+def segments(labeled_windows, merge=True):
+    """
+    :param labeled_windows: ``(start_ms, end_ms, label, score)`` per window,
+        in time order, each window starting where the previous one ends
+    :param merge: join consecutive windows with the same label
+    :returns: ``(start_ms, end_ms, label, scores)`` per segment, with one
+        score per window in time order
+    """
+    if merge:
+        groups = (list(group) for _, group
+                  in groupby(labeled_windows, key=lambda w: w[2]))
+    else:
+        groups = ([window] for window in labeled_windows)
+    for group in groups:
+        yield (group[0][0], group[-1][1], group[0][2],
+               [window[3] for window in group])
 
 
 class WhisperSpokenLid(ClamsApp):
@@ -45,41 +64,58 @@ class WhisperSpokenLid(ClamsApp):
         """
         mels = torch.stack([
             whisper.log_mel_spectrogram(
-                whisper.pad_or_trim(torch.from_numpy(samples)), n_mels=model.dims.n_mels)
+                whisper.pad_or_trim(torch.from_numpy(samples)),
+                n_mels=model.dims.n_mels)
             for samples in windows]).to(model.device)
         with torch.no_grad():
             _, probs = model.detect_language(mels)
         return probs
 
+    def label_windows(self, model, windows, batch_size):
+        """
+        :param windows: ``(samples, start_ms, end_ms)`` per window
+        :returns: ``(start_ms, end_ms, label, score)`` per window, where
+            ``label`` is the most probable language and ``score`` its
+            probability
+        """
+        for batch in batched(windows, batch_size):
+            probs = self.detect(model, [samples for samples, _, _ in batch])
+            for (_, start_ms, end_ms), window_probs in zip(batch, probs):
+                label = max(window_probs, key=window_probs.get)
+                # TODO: only the top language's probability is kept, so a
+                # close runner-up (e.g. tl 0.47 vs id 0.33) is lost; revisit
+                # if consumers need the margin to the second language
+                yield start_ms, end_ms, label, window_probs[label]
+
     def _annotate(self, mmif: Mmif, **parameters) -> Mmif:
         window_ms = parameters['windowMs']
         if window_ms > MAX_WINDOW_MS:
-            raise ValueError(f'windowMs must be at most {MAX_WINDOW_MS}, got {window_ms}')
-        stride_ms = window_ms + parameters['windowGapMs']
-        if stride_ms <= 0:
-            raise ValueError(f'windowGapMs must be greater than -windowMs ({-window_ms})')
+            raise ValueError(f'windowMs must be at most {MAX_WINDOW_MS}, '
+                             f'got {window_ms}')
         model = self._get_model(parameters['model'])
-        labelset = list(get_tokenizer(model.is_multilingual,
-                                      num_languages=model.num_languages).all_language_codes)
-        top_k = parameters['topK']
+        tokenizer = get_tokenizer(model.is_multilingual,
+                                  num_languages=model.num_languages)
+        labelset = list(tokenizer.all_language_codes)
 
-        for doc in chain(mmif.get_documents_by_type(DocumentTypes.AudioDocument),
-                         mmif.get_documents_by_type(DocumentTypes.VideoDocument)):
+        docs = chain(mmif.get_documents_by_type(DocumentTypes.AudioDocument),
+                     mmif.get_documents_by_type(DocumentTypes.VideoDocument))
+        for doc in docs:
             view = mmif.new_view()
             self.sign_view(view, parameters)
             view.new_contain(AnnotationTypes.TimeFrame, document=doc.id,
                              timeUnit='milliseconds', labelset=labelset)
+            # windows follow each other with no overlap and no gap, so
+            # merged windows cover their time span exactly
             windows = adh.iter_audio_windows(
-                doc, window_ms, stride_ms=stride_ms,
-                sample_rate=whisper.audio.SAMPLE_RATE,
+                doc, window_ms, sample_rate=whisper.audio.SAMPLE_RATE,
                 min_last_window_ms=parameters['minLastWindowMs'])
-            for batch in batched(windows, parameters['batchSize']):
-                probs = self.detect(model, [samples for samples, _, _ in batch])
-                for (_, start_ms, end_ms), window_probs in zip(batch, probs):
-                    ranked = sorted(window_probs.items(), key=lambda kv: kv[1], reverse=True)
-                    view.new_annotation(AnnotationTypes.TimeFrame,
-                                        start=start_ms, end=end_ms, label=ranked[0][0],
-                                        classification=dict(ranked[:top_k]))
+            labeled = self.label_windows(model, windows,
+                                         parameters['batchSize'])
+            for start_ms, end_ms, label, scores in segments(
+                    labeled, parameters['mergeWindows']):
+                view.new_annotation(AnnotationTypes.TimeFrame,
+                                    start=start_ms, end=end_ms,
+                                    label=label, scores=scores)
         return mmif
 
 
@@ -89,8 +125,10 @@ def get_app():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", action="store", default="5000", help="set port to listen")
-    parser.add_argument("--production", action="store_true", help="run gunicorn server")
+    parser.add_argument("--port", action="store", default="5000",
+                        help="set port to listen")
+    parser.add_argument("--production", action="store_true",
+                        help="run gunicorn server")
     parsed_args = parser.parse_args()
 
     app = get_app()

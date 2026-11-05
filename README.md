@@ -2,9 +2,9 @@
 
 ## Description
 
-Spoken language identification (LID) over fixed-length windows of an audio track, using the language detection of [OpenAI Whisper](https://github.com/openai/whisper). The app reads the audio of an `AudioDocument` or `VideoDocument` in windows through `mmif.utils.audio_document_helper`, runs Whisper's language detection on each window, and writes one `TimeFrame` per window.
+Spoken language identification (LID) over fixed-length windows of an audio track, using the language detection of [OpenAI Whisper](https://github.com/openai/whisper). The app reads the audio of an `AudioDocument` or `VideoDocument` in back-to-back windows of `windowMs` through `mmif.utils.audio_document_helper`, and runs Whisper's language detection on each window.
 
-Each `TimeFrame` has `start` and `end` in milliseconds, a `label` with the most probable Whisper language code, and a `classification` with the probabilities of the `topK` most probable languages. The view's `TimeFrame` metadata lists all language codes of the model as `labelset`.
+Whisper gives one language per window. Consecutive windows with the same most probable language become one `TimeFrame`, with `start` and `end` in milliseconds and the Whisper language code as `label`. Its `scores` list holds, in time order, the probability Whisper gave that language in each of the merged windows, so a low-confidence window inside a long segment stays visible. With `mergeWindows=false`, each window becomes its own `TimeFrame`. The view's `TimeFrame` metadata lists all language codes of the model as `labelset`.
 
 Whisper pads or trims every input to 30 seconds, so a window is at most 30 seconds long.
 
