@@ -1,2 +1,4 @@
-clams-python==1.8.2
+clams-python==1.9.0
+# PyAV for mmif.utils.audio_document_helper; the version clams-python pins
+mmif-python[av]==1.8.1
 openai-whisper==20250625

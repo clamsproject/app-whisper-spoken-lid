@@ -32,18 +32,24 @@ def appmetadata() -> AppMetadata:
         url="https://github.com/clamsproject/app-whisper-spoken-lid",
         analyzer_version=WHISPER_VERSION,
         analyzer_license="MIT",
+        # approximate VRAM (MB) of the default "tiny" model; larger models
+        # need more ("turbo" about 6 GB, "large" about 10 GB)
+        est_gpu_mem_min=1500,
+        est_gpu_mem_typ=1500,
     )
     metadata.add_input_oneof(DocumentTypes.AudioDocument,
                              DocumentTypes.VideoDocument)
     out_tf = metadata.add_output(AnnotationTypes.TimeFrame,
-                                 timeUnit='milliseconds')
+                                 timeUnit='milliseconds', document='*',
+                                 labelset='*', label='*', scores='*')
     out_tf.add_description(
         'Each TimeFrame covers consecutive windows whose most probable '
-        'language is `label`. `scores` lists, in time order, the '
-        'probability whisper gave `label` in each of those windows, one '
-        'float in [0, 1] per window. Window i starts at `start` + i * '
-        '`windowMs`; the last window ends at `end` and can be shorter. The '
-        'probabilities are not calibrated.')
+        'language is `label`, a whisper language code. `labelset` lists all '
+        'language codes of the whisper model in use. `scores` lists, in '
+        'time order, the probability whisper gave `label` in each of those '
+        'windows, one float in [0, 1] per window. Window i starts at '
+        '`start` + i * `windowMs`; the last window ends at `end` and can be '
+        'shorter. The probabilities are not calibrated.')
 
     metadata.add_parameter(
         name='model', type='string', default='tiny', choices=MODEL_SIZES,
