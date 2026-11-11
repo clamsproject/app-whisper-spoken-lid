@@ -25,8 +25,8 @@ def appmetadata() -> AppMetadata:
         description=(
             "Spoken language identification over fixed-length windows of "
             "an audio track, using the language detection of OpenAI "
-            "Whisper. Consecutive windows with the same most probable "
-            "language become one TimeFrame."),
+            "Whisper. Consecutive windows with the same language can be "
+            "merged into one TimeFrame."),
         app_license="Apache 2.0",
         identifier="whisper-spoken-lid",
         url="https://github.com/clamsproject/app-whisper-spoken-lid",
@@ -43,13 +43,15 @@ def appmetadata() -> AppMetadata:
                                  timeUnit='milliseconds', document='*',
                                  labelset='*', label='*', scores='*')
     out_tf.add_description(
-        'Each TimeFrame covers consecutive windows whose most probable '
-        'language is `label`, a whisper language code. `labelset` lists all '
-        'language codes of the whisper model in use. `scores` lists, in '
-        'time order, the probability whisper gave `label` in each of those '
-        'windows, one float in [0, 1] per window. Window i starts at '
-        '`start` + i * `windowMs`; the last window ends at `end` and can be '
-        'shorter. The probabilities are not calibrated.')
+        'Each TimeFrame covers consecutive windows that Whisper labels with '
+        'the language `label`. Language labels are canonicalized to BCP 47 '
+        'tags, and `labelMap` can reduce them; see README.md in the app '
+        'repository for details. `labelset` lists all labels the view can '
+        'have. `scores` lists, in time order, the Whisper probability of '
+        '`label` in each of those windows, one float in [0, 1] per window. '
+        'Window i starts at `start` + i * `windowMs`; the last window ends '
+        'at `end` and can be shorter. The probabilities are not '
+        'calibrated.')
 
     metadata.add_parameter(
         name='model', type='string', default='tiny', choices=MODEL_SIZES,
@@ -63,10 +65,21 @@ def appmetadata() -> AppMetadata:
         description='Shortest final window to keep, in milliseconds. 0 '
                     'keeps any final window.')
     metadata.add_parameter(
-        name='mergeWindows', type='boolean', default=True,
-        description='Join consecutive windows with the same most probable '
-                    'language into one TimeFrame. When false, each window '
-                    'becomes its own TimeFrame.')
+        name='tfMerge', type='boolean', default=True,
+        description='Join consecutive windows with the same label into one '
+                    'TimeFrame. When false, each window becomes its own '
+                    'TimeFrame, with one score.')
+    metadata.add_parameter(
+        name='labelMap', type='string', default=[], multivalued=True,
+        description='Labels to keep, as "IN:OUT" (rename IN to OUT) or "IN" '
+                    '(keep IN as it is). Other labels become "-". Empty '
+                    'keeps every label of the model. See README.md in the '
+                    'app repository for how the label is chosen.')
+    metadata.add_parameter(
+        name='minLabelScore', type='number', default=0.5,
+        description='Minimum score for a label from labelMap to be kept; a '
+                    'window whose best mapped label scores less becomes '
+                    '"-". Only applies with labelMap.')
     metadata.add_parameter(
         name='batchSize', type='integer', default=1,
         description='Number of windows passed to the model at once.')
